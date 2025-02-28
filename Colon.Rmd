@@ -1,0 +1,105 @@
+---
+title: "survival_test"
+output: pdf_document
+date: "2025-02-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Install necessary packages if not already installed
+install.packages(c("survival", "survminer"))
+
+# Load libraries
+library(survival)
+library(survminer)
+
+```
+
+```{r}
+# Load the dataset from the survival package
+data("colon", package = "survival")
+
+# Check if the dataset is loaded
+head(colon)  # View first few rows
+```
+
+```{r}
+# Subset relevant observations (e.g., patients from a clinical trial)
+colon_data <- subset(colon, etype == 2)
+
+# Convert categorical variables
+colon_data$sex <- factor(colon_data$sex, labels = c("Male", "Female"))
+colon_data$rx <- factor(colon_data$rx, labels = c("Obs", "Lev", "Lev+5FU"))
+
+```
+
+```{r}
+# Install survminer if not installed
+install.packages("survminer")
+
+# Load survminer library
+library(survminer)
+
+```
+
+```{r}
+# Kaplan-Meier Survival Estimate
+km_fit <- survfit(Surv(time, status) ~ 1, data = colon_data)
+
+# Plot Kaplan-Meier curve
+ggsurvplot(km_fit, conf.int = TRUE, risk.table = TRUE,
+           title = "Kaplan-Meier Survival Estimate",
+           xlab = "Time (days)", ylab = "Survival Probability")
+
+```
+
+```{r}
+# Kaplan-Meier estimate by treatment group
+km_group_fit <- survfit(Surv(time, status) ~ rx, data = colon_data)
+
+# Log-rank test for survival difference
+survdiff(Surv(time, status) ~ rx, data = colon_data)
+
+# Plot survival curves by treatment group
+ggsurvplot(km_group_fit, pval = TRUE, risk.table = TRUE,
+           title = "Kaplan-Meier Survival by Treatment",
+           legend.title = "Treatment Group",
+           xlab = "Time (days)", ylab = "Survival Probability")
+
+```
+
+```{r}
+# Fit Cox model
+cox_model <- coxph(Surv(time, status) ~ age + sex + nodes + rx, data = colon_data)
+
+# Model summary
+summary(cox_model)
+
+# Visualize Cox model results
+ggforest(cox_model, data = colon_data)
+
+```
+
+```{r}
+# Test for proportional hazards assumption
+cox_zph <- cox.zph(cox_model)
+
+# Print results
+print(cox_zph)
+
+# Plot Schoenfeld residuals
+plot(cox_zph)
+
+```
+
+```{r}
+# Concordance index (C-index)
+cat("Concordance Index:", summary(cox_model)$concordance[1])
+
+# Log-Likelihood Test
+anova(cox_model)
+
+```
