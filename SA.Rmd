@@ -1,0 +1,171 @@
+---
+title: "SA"
+output: html_document
+date: "2025-03-10"
+---
+#This R script performs Survival Analysis with a focus on nonparametric comparison of 2 or more groups
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+install_if_missing <- function(...) {
+  packages <- c(...)
+  new_packages <- packages[!(packages %in% installed.packages()[,"Package"])]
+  if(length(new_packages)) install.packages(new_packages)
+}
+
+
+install_if_missing("ggplot2", "dplyr", "survival", "survminer", "tidyverse", "mice", "naniar", "VIM")
+
+
+library(ggplot2)
+library(dplyr)
+library(survival)
+library(survminer)
+library(tidyverse)
+
+library(naniar)
+library(VIM)
+
+```
+#1. Load and process the data, check missing values, remove rows with missing values 
+
+```{r data-prep}
+
+colon <- read.csv("C:/Users/ywu09/Downloads/dataset-42025.csv")
+summary(colon)
+miss_var_summary(colon)
+vis_miss(colon)
+aggr(colon, prop = FALSE, numbers = TRUE)
+colon_death <- subset(colon, etype == 2)
+sum(is.na(colon_death))
+
+# Remove rows with any missing values
+colon_complete <- na.omit(colon)
+sum(is.na(colon_complete))
+
+```
+
+#2. Nonparametric comparison of 2 or more groups_ treatment 
+
+
+```{r kaplan-meier}
+#create a survival object 
+surv_obj <-Surv(time = colon$time, event =colon$status)
+head(surv_obj)
+
+fit_rx <- survfit(surv_obj ~ rx, data = colon)
+ggsurvplot(fit_rx, 
+           data = colon,
+           pval = TRUE,           # Show p-value of log-rank test
+           risk.table = TRUE,     # Add risk table
+           conf.int = TRUE,       # Add confidence intervals
+           xlab = "Time in days", 
+           legend.title = "Treatment",
+           legend.labs = c("Observation", "Levamisole", "Lev+5FU"),
+)
+
+
+
+
+```
+# Result: Significant difference in survival between treatment groups
+##Lev+5FU vs. Observation: Significant survival benefit (adjusted p = 0.009).
+
+#conclusion:
+
+
+
+#Nonparametric comparison of 2 or more group___age
+
+```{r Compares survival curves across treatment groups}
+# Perform log-rank test
+log_rank_test <- survdiff(surv_obj ~ rx, data = colon)
+print(log_rank_test)
+
+
+
+# Create a function for pairwise log-rank tests
+pairwise_logrank <- function(formula, data, ...) {
+  groups <- unique(eval(formula[[3]], data))
+  combinations <- combn(groups, 2)
+  results <- data.frame(group1 = character(), 
+                        group2 = character(), 
+                        p.value = numeric(),
+                        stringsAsFactors = FALSE)
+  
+  for(i in 1:ncol(combinations)) {
+    g1 <- combinations[1, i]
+    g2 <- combinations[2, i]
+    subset_data <- data[eval(formula[[3]], data) %in% c(g1, g2), ]
+    test <- survdiff(formula, data = subset_data, ...)
+    p.val <- 1 - pchisq(test$chisq, length(test$n) - 1)
+    results <- rbind(results, data.frame(group1 = g1, group2 = g2, p.value = p.val))
+  }
+  
+  return(results)
+}
+
+# Perform pairwise comparisons
+
+# Create a survival object
+surv_obj <- Surv(time = colon$time, event = colon$status)
+
+# Perform pairwise comparisons
+pairwise_results <- pairwise_logrank(Surv(time, status) ~ rx, data = colon)
+print(pairwise_results)
+
+# Apply Bonferroni correction for multiple testing
+pairwise_results$p.adjusted <- p.adjust(pairwise_results$p.value, method = "bonferroni")
+print(pairwise_results)
+
+```
+#conclusion: age significantly impacts recurrence-free survival (log-rank p=0.002). Patients <30 years old demonstrate the best outcomes (median survival 3021 days), while those >60 years have the poorest prognosis (median 1622 days). These differences persist after pairwise comparisons (p<0.05). However, age groups may differ in treatment allocation or tumor characteristics; further adjustment for covariates in a Cox model is warranted."
+
+#Compare age groups
+```{r age group}
+
+colon_complete <- colon_complete |> 
+  mutate(
+    age_group = cut(age,
+      breaks = c(0, 30, 60, 100),
+      labels = c("<30", "30-60", ">60")
+    )
+)
+
+# Verify group distribution
+table(colon_complete$age_group)
+
+
+# Log-Rank Test for age groups
+survdiff(Surv(time, status) ~ age_group, data = colon_complete) |> 
+  print()
+
+# Kaplan-Meier Plot
+ggsurvplot(
+  survfit(Surv(time, status) ~ age_group, data = colon_complete),
+  pval = TRUE, risk.table = TRUE, palette = "Dark2",
+  title = "Age Group Comparison"
+)
+```
+#Cox model 
+```{r Cox model}
+cox_model <- coxph(
+  Surv(time, status) ~ rx + sex + age + obstruct + nodes + differ + extent,
+  data = colon_complete
+)
+summary(cox_model)
+
+
+```
+
+
+#check assumption 
+```{r Cox model}
+test_ph <- cox.zph(cox_model)
+print(test_ph)  
+ggcoxzph(test_ph)
+
+```
+
