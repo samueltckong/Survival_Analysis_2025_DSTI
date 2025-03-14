@@ -51,24 +51,52 @@ sum(is.na(colon_complete))
 
 
 ```{r kaplan-meier}
-#create a survival object 
-surv_obj <-Surv(time = colon$time, event =colon$status)
-head(surv_obj)
+# Create a survival object 
+surv_obj <- Surv(time = colon$time, event = colon$status)
+
 
 fit_rx <- survfit(surv_obj ~ rx, data = colon)
-ggsurvplot(fit_rx, 
-           data = colon,
-           pval = TRUE,           # Show p-value of log-rank test
-           risk.table = TRUE,     # Add risk table
-           conf.int = TRUE,       # Add confidence intervals
-           xlab = "Time in days", 
-           legend.title = "Treatment",
-           legend.labs = c("Observation", "Levamisole", "Lev+5FU"),
+
+
+smaller_theme <- theme(
+  plot.title = element_text(size = 10),
+  axis.title = element_text(size = 8),
+  axis.text = element_text(size = 7),
+  legend.title = element_text(size = 8),
+  legend.text = element_text(size = 7),
+  legend.position = "top"
 )
 
 
+km_plot <- ggsurvplot(fit_rx, 
+                     data = colon,
+                     pval = TRUE,           
+                     risk.table = TRUE,     
+                     conf.int = TRUE,       
+                     xlab = "Time in days", 
+                     legend.title = "Treatment",
+                     legend.labs = c("Observation", "Levamisole", "Lev+5FU"),
+                     surv.median.line = "hv",
+                    
+                     ggtheme = theme_bw() + smaller_theme,
+                    
+                     tables.theme = theme_cleantable() + smaller_theme,
+                     risk.table.y.text.col = TRUE,
+                     risk.table.y.text = FALSE,
+                     risk.table.height = 0.25,
+                    
+                     pval.size = 3,
+                     pval.coord = c(0, 0.1)  
+)
 
 
+km_plot$table <- km_plot$table + theme(
+  axis.text = element_text(size = 6),
+  axis.title = element_text(size = 7)
+)
+
+
+print(km_plot)
 ```
 # Result: Significant difference in survival between treatment groups
 ##Lev+5FU vs. Observation: Significant survival benefit (adjusted p = 0.009).
@@ -77,8 +105,8 @@ ggsurvplot(fit_rx,
 
 
 
-#Nonparametric comparison of 2 or more group___age
 
+##Log-Rank Test and Pairwise
 ```{r Compares survival curves across treatment groups}
 # Perform log-rank test
 log_rank_test <- survdiff(surv_obj ~ rx, data = colon)
@@ -121,9 +149,9 @@ pairwise_results$p.adjusted <- p.adjust(pairwise_results$p.value, method = "bonf
 print(pairwise_results)
 
 ```
-#conclusion: age significantly impacts recurrence-free survival (log-rank p=0.002). Patients <30 years old demonstrate the best outcomes (median survival 3021 days), while those >60 years have the poorest prognosis (median 1622 days). These differences persist after pairwise comparisons (p<0.05). However, age groups may differ in treatment allocation or tumor characteristics; further adjustment for covariates in a Cox model is warranted."
 
-#Compare age groups
+
+#Nonparametric comparison of 2 or more group___age
 ```{r age group}
 
 colon_complete <- colon_complete |> 
@@ -149,6 +177,7 @@ ggsurvplot(
   title = "Age Group Comparison"
 )
 ```
+#conclusion: age significantly impacts recurrence-free survival (log-rank p=0.002). Patients <30 years old demonstrate the best outcomes (median survival 3021 days), while those >60 years have the poorest prognosis (median 1622 days). These differences persist after pairwise comparisons (p<0.05). 
 #Cox model 
 ```{r Cox model}
 cox_model <- coxph(
