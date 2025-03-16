@@ -1,7 +1,3 @@
-Below is a sample README.md for your GitHub repository:
-
----
-
 # Colon Survival Analysis
 
 This repository contains a comprehensive survival analysis on the Colon Cancer dataset using both nonparametric and semi‐parametric methods. The analyses are split into multiple R Markdown files, and the corresponding model outputs are provided as PDFs.
