@@ -1,5 +1,6 @@
 ---
-title: "SA"
+title: "Nonparametric comparison of 2 or more groups"
+author : Yuting Wu
 output: html_document
 date: "2025-03-10"
 ---
