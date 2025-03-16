@@ -1,0 +1,154 @@
+---
+title: "Survival Analysis of Colon Cancer"
+author: "Denis SOH"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+# Introduction
+
+This analysis uses the `colon` dataset from the `{survival}` package to evaluate factors influencing survival time among colon cancer patients. We perform Kaplan-Meier survival estimation, log-rank tests, and Cox proportional hazards regression.
+
+# Data Preparation
+
+```{r setup, message=FALSE, warning=FALSE}
+library(survival)
+library(survminer)
+library(dplyr)
+library(broom)
+library(ggplot2)
+library(kableExtra)
+
+# Load dataset
+data(colon, package = "survival")
+colon <- na.omit(colon)
+colon <- colon[colon$etype == 2, ]
+
+# Convert relevant variables to factors
+colon$sex <- factor(colon$sex, labels = c("Male", "Female"))
+colon$rx <- factor(colon$rx, levels = c("Obs", "Lev", "Lev+5FU"))
+colon$obstruct <- factor(colon$obstruct, labels = c("No", "Yes"))
+
+# Summary statistics
+summary(colon[, c("time", "status", "age", "sex", "rx", "obstruct", "nodes")])
+```
+
+# Kaplan-Meier Survival Estimation
+
+```{r km-overall, fig.width=7, fig.height=5}
+library(survminer)
+km_fit <- survfit(Surv(time, status) ~ rx, data = colon)
+ggsurvplot(km_fit, data = colon, risk.table = TRUE, pval = TRUE,
+           ggtheme = theme_minimal(),
+           title = "Kaplan-Meier Survival Curves by Treatment")
+```
+
+The Kaplan-Meier curves indicate significant survival differences among treatment groups, with **Levamisole+5FU** showing better survival outcomes.
+
+# Log-rank Test
+
+```{r log-rank-test}
+# Log-rank test by treatment
+test_rx <- survdiff(Surv(time, status) ~ rx, data = colon)
+test_result <- broom::tidy(test_rx)
+kable(test_result, caption = "Log-rank test for survival differences among treatments") %>%
+  kable_styling()
+```
+
+The Log-rank test confirms significant differences in survival between groups (`p < 0.001`).
+
+# Cox Proportional Hazards Model
+
+```{r cox-model}
+cox_model <- coxph(Surv(time, status) ~ age + sex + obstruct + nodes + rx, data = colon)
+summary(cox_model)
+
+# HR Table
+cox_results <- tidy(cox_model, exponentiate = TRUE, conf.int = TRUE)
+cox_results <- cox_results %>%
+  select(term, estimate, conf.low, conf.high, p.value) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+colnames(cox_results) <- c("Variable", "HR", "Lower CI", "Upper CI", "p-value")
+
+cox_results %>%
+  kable(caption = "Cox Regression Model Hazard Ratios") %>%
+  kable_styling()
+```
+
+## Interpretation of Hazard Ratios
+
+```{r}
+
+# Installer les packages si nécessaire
+if (!requireNamespace("broom", quietly = TRUE)) install.packages("broom")
+if (!requireNamespace("kableExtra", quietly = TRUE)) install.packages("kableExtra")
+if (!requireNamespace("dplyr", quietly = TRUE)) install.packages("dplyr")
+
+library(broom)
+library(kableExtra)
+library(dplyr)
+
+# Ajustement du modèle de Cox
+cox_model <- coxph(Surv(time, status) ~ age + sex + obstruct + nodes + rx, data=colon)
+
+# Extraction des résultats sous forme lisible avec Hazard Ratios
+cox_results <- broom::tidy(cox_model, exponentiate = TRUE, conf.int = TRUE) %>% 
+  dplyr::select(term, estimate, conf.low, conf.high, p.value) %>%
+  dplyr::rename(
+    Variable = term,
+    HR = estimate,
+    LowerCI = conf.low,
+    UpperCI = conf.high,
+    p = p.value
+  ) %>%
+  mutate(across(where(is.numeric), round, 3))
+
+# Tableau avec interprétations personnalisées
+cox_results$Interpretation <- c(
+  "Small but significant increase in hazard per additional year of age.",
+  "Not significant, no difference between females and males.",
+  "Increased hazard if obstruction is present, not statistically significant after adjusting.",
+  "Significant increase in hazard per additional positive lymph node.",
+  "No significant difference compared to observation.",
+  "Significant improvement in survival compared to observation."
+)
+
+# Afficher le tableau formaté
+cox_results %>% 
+  kableExtra::kable(caption = "Interpretation of Hazard Ratios from Cox Regression Model", align="lcccc") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+# Checking Proportional Hazards Assumption
+
+```{r cox-ph}
+zph <- cox.zph(cox_model)
+ggcoxzph(zph)
+```
+
+The assumption of proportional hazards is reasonably met as no significant p-values appear.
+
+# Model Performance: Harrell's C-index
+
+```{r c-index}
+cox_summary <- summary(cox_model)
+cox_summary$concordance
+```
+
+The concordance index (Harrell's C-index) is around `r round(cox_summary$concordance[1], 2)`, indicating good predictive performance.
+
+# Forest Plot of Hazard Ratios
+
+```{r forest-plot, fig.width=7, fig.height=5}
+ggforest(cox_model, data = colon)
+```
+
+The forest plot clearly highlights variables significantly impacting survival, notably the combination treatment (Lev+5FU) and the number of positive lymph nodes.
+
+# Conclusion
+
+This survival analysis highlights that treatment with **Levamisole+5FU** and **fewer positive nodes** significantly improve survival in colon cancer patients. Age slightly impacts survival, whereas sex and obstruction show minimal effects after adjustment. The Cox model is robust with adequate predictive performance (C-index ~0.7). Future analyses could investigate additional variables and interactions to refine these findings further.
