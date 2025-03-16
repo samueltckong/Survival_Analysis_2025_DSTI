@@ -1,5 +1,6 @@
 ---
 title: "Semi-parametric Cox regression model"
+author : Samuel Kong
 output: pdf_document
 date: "2025-02-28"
 ---
