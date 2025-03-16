@@ -1,0 +1,214 @@
+---
+title: "S24 survival analysis"
+subtitle: "Yuting WU"
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-03-10"
+---
+#This R script performs Survival Analysis with a focus on nonparametric comparison of 2 or more groups
+
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+remove.packages("xfun")
+
+
+install.packages("xfun")
+
+
+install_if_missing <- function(...) {
+  packages <- c(...)
+  new_packages <- packages[!(packages %in% installed.packages()[,"Package"])]
+  if(length(new_packages)) install.packages(new_packages)
+}
+
+
+install_if_missing("ggplot2", "dplyr", "survival", "survminer", "tidyverse", "mice", "naniar", "VIM")
+
+
+library(ggplot2)
+library(dplyr)
+library(survival)
+library(survminer)
+library(tidyverse)
+
+library(naniar)
+library(VIM)
+
+```
+#1. Load and process the data, check missing values, remove rows with missing values 
+
+```{r data-prep}
+
+colon <- read.csv("C:/Users/ywu09/Downloads/dataset-42025.csv")
+summary(colon)
+miss_var_summary(colon)
+vis_miss(colon)
+aggr(colon, prop = FALSE, numbers = TRUE)
+colon_death <- subset(colon, etype == 2)
+sum(is.na(colon_death))
+
+#handling missing values: remove rows with any missing values
+colon_complete <- na.omit(colon)
+sum(is.na(colon_complete))
+
+```
+
+#2. Nonparametric comparison of 2 or more groups_ treatment 
+# Result: Significant difference in survival between treatment groups
+##Lev+5FU vs. Observation: Significant survival benefit (adjusted p = 0.009).
+#all three observed groups has a survival rateat time 0 at 100% and decline overtime, but shows differences in rates. 
+#"3000-day mark:
+#Levamisole group: ~60% survival probability
+#Observation group: ~43% survival probability
+#Lev+5FU group: ~40% survival probability
+
+#conclusion:
+##The Levamisole group shows a consistently better survival rate through the entire period, comparing with the 2 other groups.Observation vs Lev+5FU show relatively close result for the first 1500days, after 1500days Lev+5FU group shows slightly worse survival than observation group. 
+```{r, warning=FALSE}
+# Create a survival object 
+surv_obj <- Surv(time = colon$time, event = colon$status)
+
+
+fit_rx <- survfit(surv_obj ~ rx, data = colon)
+
+
+smaller_theme <- theme(
+  plot.title = element_text(size = 10),
+  axis.title = element_text(size = 8),
+  axis.text = element_text(size = 7),
+  legend.title = element_text(size = 8),
+  legend.text = element_text(size = 7),
+  legend.position = "top"
+)
+
+
+km_plot <- ggsurvplot(fit_rx, 
+                     data = colon,
+                     pval = TRUE,           
+                     risk.table = TRUE,     
+                     conf.int = TRUE,       
+                     xlab = "Time in days", 
+                     legend.title = "Treatment",
+                     legend.labs = c("Observation", "Levamisole", "Lev+5FU"),
+                     surv.median.line = "hv",
+                    
+                     ggtheme = theme_bw() + smaller_theme,
+                    
+                     tables.theme = theme_cleantable() + smaller_theme,
+                     risk.table.y.text.col = TRUE,
+                     risk.table.y.text = FALSE,
+                     risk.table.height = 0.25,
+                    
+                     pval.size = 3,
+                     pval.coord = c(0, 0.1)  
+)
+
+
+km_plot$table <- km_plot$table + theme(
+  axis.text = element_text(size = 6),
+  axis.title = element_text(size = 7)
+)
+
+
+print(km_plot)
+```
+
+
+
+
+
+##Log-Rank Test and Pairwise
+#The pairwise log-rank tests compare each pair of treatment groups to determine which specific group differences are driving the overall significant result.  Result shows significant differences in survival bewteen treatment groups, and significant pairwise differences between certain treatment groups. 
+#bonfferroni : P-adjusted values < 0.05 indicate there's statistically significant differences even after taking into account multiple comparisons.
+```{r, warning=FALSE}
+# Perform log-rank test
+log_rank_test <- survdiff(surv_obj ~ rx, data = colon)
+print(log_rank_test)
+
+
+
+# Create a function for pairwise log-rank tests
+pairwise_logrank <- function(formula, data, ...) {
+  groups <- unique(eval(formula[[3]], data))
+  combinations <- combn(groups, 2)
+  results <- data.frame(group1 = character(), 
+                        group2 = character(), 
+                        p.value = numeric(),
+                        stringsAsFactors = FALSE)
+  
+  for(i in 1:ncol(combinations)) {
+    g1 <- combinations[1, i]
+    g2 <- combinations[2, i]
+    subset_data <- data[eval(formula[[3]], data) %in% c(g1, g2), ]
+    test <- survdiff(formula, data = subset_data, ...)
+    p.val <- 1 - pchisq(test$chisq, length(test$n) - 1)
+    results <- rbind(results, data.frame(group1 = g1, group2 = g2, p.value = p.val))
+  }
+  
+  return(results)
+}
+
+#Create a survival object
+surv_obj <- Surv(time = colon$time, event = colon$status)
+
+#pairwise comparisons
+pairwise_results <- pairwise_logrank(Surv(time, status) ~ rx, data = colon)
+print(pairwise_results)
+
+# Apply Bonferroni
+pairwise_results$p.adjusted <- p.adjust(pairwise_results$p.value, method = "bonferroni")
+print(pairwise_results)
+
+```
+
+
+#Nonparametric comparison of 2 or more group___age
+
+
+
+#conclusion: age significantly impacts recurrence-free survival (log-rank p=0.002). Patients <30 years old demonstrate the best outcomes (median survival 3021 days), while those >60 years have the poorest prognosis (median 1622 days). These differences persist after pairwise comparisons (p<0.05). 
+```{r age group}
+
+colon_complete <- colon_complete |> 
+  mutate(
+    age_group = cut(age,
+      breaks = c(0, 30, 60, 100),
+      labels = c("<30", "30-60", ">60")
+    )
+)
+
+# Verify group distribution
+table(colon_complete$age_group)
+
+
+# Log-Rank Test for age groups
+survdiff(Surv(time, status) ~ age_group, data = colon_complete) |> 
+  print()
+
+# Kaplan-Meier Plot
+ggsurvplot(
+  survfit(Surv(time, status) ~ age_group, data = colon_complete),
+  pval = TRUE, risk.table = TRUE, palette = "Dark2",
+  title = "Age Group Comparison"
+)
+```
+ 
+#Cox model 
+```{r Cox model}
+cox_model <- coxph(
+  Surv(time, status) ~ rx + sex + age + obstruct + nodes + differ + extent,
+  data = colon_complete
+)
+summary(cox_model)
+test_ph <- cox.zph(cox_model)
+print(test_ph)  
+ggcoxzph(test_ph)
+
+```
+
+
