@@ -1,0 +1,1916 @@
+---
+title: "Colon Cancer Survival Analysis"
+author: "Sourena Mohit"
+output: html_notebook
+---
+
+# Step 1: Load and Import the Dataset
+In this step, we want to:
+
+1. Ensure the survival package is installed (because it contains the colon dataset).
+2. Load the survival package.
+3. Load the colon dataset into our R environment.
+4. Copy the dataset to a new object (colon_data) so we don’t accidentally overwrite the original.
+
+```{r load-data, message=FALSE, warning=FALSE}
+
+# 1. Check if the 'survival' package is installed; if not, install it.
+if (!require("survival")) install.packages("survival", dependencies=TRUE)
+
+# 2. Load the 'survival' package into the R session
+library(survival)
+
+# 3. Load the 'colon' dataset from the 'survival' package
+data("colon")
+
+# 4. Make a copy of the dataset
+colon_data <- colon
+
+```
+
+## Step 2: Explore the Dataset
+In Step 2, our goal is to examine the dataset to understand its contents, identify potential issues, and plan how to handle them. Below is a structured explanation of each part of your code and the corresponding results.
+
+```{r}
+# Define a helper function to install packages if they're not already installed
+install_if_missing <- function(packages) {
+  new_pkgs <- packages[!(packages %in% installed.packages()[, "Package"])]
+  if (length(new_pkgs)) install.packages(new_pkgs, dependencies = TRUE)
+}
+
+# Specify required packages
+packages_needed <- c("skimr", "kableExtra", "dplyr")
+
+# Install missing packages
+install_if_missing(packages_needed)
+
+# Load the packages
+lapply(packages_needed, library, character.only = TRUE)
+
+# View the first few rows
+head(colon_data)
+
+# Check the structure of the dataset
+str(colon_data)
+
+# Get summary statistics
+summary(colon_data)
+
+# Generate summary statistics using skimr
+summary_stats <- skim(colon)
+
+# View the summary statistics
+print(summary_stats)
+
+# Convert the summary statistics to a nicely formatted table
+summary_table <- summary_stats %>%
+  kable("html", caption = "Summary Statistics of the Colon Dataset") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+# Print the table
+summary_table
+
+# Save the table as an HTML file
+save_kable(summary_table, file = "summary_table.html")
+
+# Function to plot boxplots for all numeric columns
+plot_boxplots <- function(data) {
+  numeric_cols <- sapply(data, is.numeric)
+  numeric_data <- data[, numeric_cols, drop = FALSE]
+  
+  # Optional: arrange multiple plots in a grid (2 rows, 3 columns)
+  par(mfrow = c(2, 3))  
+  for (col in names(numeric_data)) {
+    boxplot(
+      numeric_data[[col]], 
+      main = paste("Boxplot of", col), 
+      xlab = col, 
+      col = "lightblue", 
+      border = "darkblue"
+    )
+  }
+  # Reset the plotting area to a single panel
+  par(mfrow = c(1, 1))  
+}
+
+# Call the function
+plot_boxplots(colon_data)
+# Check for missing values
+colSums(is.na(colon_data))
+```
+
+## Analysis of the Exploratory Results
+Below is a structured analysis of your Step 2 exploratory findings. walk through the key takeaways from the summary statistics, missing values check, and boxplots.
+
+### 1. Data Structure Recap
+- **Observations**: 1,858 rows (each row can represent a patient event record).
+- **Variables**: 16 columns (numeric and factor types).
+
+#### Key Variables:
+- **time**: Time in days until an event (recurrence or death) or censoring.
+- **status**: Event occurrence indicator (1 = event, 0 = censored).
+- **etype**: Event type (1 = recurrence, 2 = death).
+- **rx**: Treatment group (3 levels: “Obs”, “Lev”, “Lev+5FU”).
+- **nodes**: Number of positive lymph nodes (0–33).
+- **differ**: Tumor differentiation (1 = well, 2 = moderate, 3 = poor).
+- **sex**: Encoded as 0 (female) and 1 (male), though numeric in the dataset.
+- **id**: Patient identifier, which is not directly useful in modeling.
+
+Understanding each variable’s purpose helps in deciding how to handle them during modeling (e.g., which to include as covariates).
+
+### 2. Missing Values
+- **nodes**: 36 missing values.
+- **differ**: 46 missing values.
+- All other variables appear complete.
+
+Missing data can bias results if not handled properly.
+
+### 3. Numeric Variable Distributions and Outliers
+From the boxplots:
+- **age**: Ranges from 18 to 85; a few younger outliers (below 30).
+- **nodes**: Heavily right-skewed. Some patients have a high count (above 10), and the maximum is 33.
+- **time**: Spans 8 to 3329 days (over 9 years). The median is around 1855 days (~5 years).
+- **sex, obstruct, perfor, adhere, status, surg, node4, etype**: Each is effectively binary or categorical (0/1 or 1/2), so boxplots show minimal variation.
+- **differ (1 to 3) and extent (1 to 4)**: Appear mostly around 2–3, with a few outliers at 1 and 4.
+
+Right-skewed data (like nodes and time) may benefit from transformations (e.g., log-transform) if needed for certain models. Outliers might represent genuine clinical scenarios, boxplots confirm the presence of two distinct categories.
+
+### 4. Factor Variables
+- **rx**: Three treatment groups (“Obs”, “Lev”, “Lev+5FU”).
+- **study**: Always 1 (no variation, so it’s not useful for analysis).
+
+rx is already a factor, but sex might be converted to a factor to make it more intuitive (0 = Female, 1 = Male). Factor variables are crucial in survival models (like Cox regression) to compare hazard rates among groups. Unvarying variables (like study) do not contribute any information to the model.
+
+### 5. Overall Observations
+- **No Large-Scale Missingness**: Only nodes (36 NAs) and differ (46 NAs) need attention.
+- **Potential Outliers**: nodes (high node counts), age (younger ages), and time (very short or very long survival).
+- **Mostly Categorical/Binary Data**: Many columns are 0/1 or 1/2, which is common in medical datasets (presence/absence, yes/no).
+- **Two Records per Patient**: Remember that each patient has two rows (one for recurrence, one for death), which will be important in modeling.
+
+
+## Step 3: Data Preprocessing and Survival Setup
+### 3.1 Convert Data Types
+convert binary/categorical variables (sex, obstruct, perfor, adhere, node4, surg, differ, extent) into factors with meaningful labels. This makes the data more readable and suitable for modeling.
+
+```{r}
+# Convert sex: 0 = Female, 1 = Male
+colon_data$sex <- factor(colon_data$sex, 
+                         levels = c(0, 1),
+                         labels = c("Female", "Male"))
+
+# Convert obstruct, perfor, adhere: 0 = No, 1 = Yes
+colon_data$obstruct <- factor(colon_data$obstruct, 
+                              levels = c(0, 1),
+                              labels = c("No", "Yes"))
+colon_data$perfor <- factor(colon_data$perfor, 
+                            levels = c(0, 1),
+                            labels = c("No", "Yes"))
+colon_data$adhere <- factor(colon_data$adhere, 
+                            levels = c(0, 1),
+                            labels = c("No", "Yes"))
+
+# Convert node4: 0 = <=4 positive nodes, 1 = >4 positive nodes
+colon_data$node4 <- factor(colon_data$node4, 
+                           levels = c(0, 1),
+                           labels = c("<=4", ">4"))
+
+# Convert surg: 0 = Short, 1 = Long
+colon_data$surg <- factor(colon_data$surg, 
+                          levels = c(0, 1),
+                          labels = c("Short", "Long"))
+
+# Convert differ: 1 = Well, 2 = Moderate, 3 = Poor
+colon_data$differ <- factor(colon_data$differ, 
+                            levels = c(1, 2, 3),
+                            labels = c("Well", "Moderate", "Poor"))
+
+# Convert extent: 1 = Submucosa, 2 = Muscle, 3 = Serosa, 4 = Contiguous structures
+colon_data$extent <- factor(colon_data$extent, 
+                            levels = c(1, 2, 3, 4),
+                            labels = c("Submucosa", "Muscle", "Serosa", "Contiguous"))
+
+```
+
+### 3.2 Handle Missing Data (Multiple Imputation)
+use the mice package to impute missing values rather than eliminating rows. This is a more robust approach when dealing with relatively small amounts of missing data.
+
+```{r message=FALSE, warning=FALSE}
+### 3.2 Handle Missing Data
+
+# 1. Install/load the 'mice' package if not present
+if (!require("mice")) install.packages("mice", dependencies = TRUE)
+library(mice)
+
+# 2. Select columns relevant for imputation
+#    (Include the variables with missing data + additional predictors)
+impute_vars <- c("nodes", "differ", "age", "sex", "obstruct", 
+                 "perfor", "adhere", "extent", "node4", "time", "status")
+
+impute_data <- colon_data[, impute_vars]
+
+# 3. Check default methods mice will use
+#    For factor variables, 'mice' often uses logistic or polyreg;
+#    for numeric, it uses pmm (Predictive Mean Matching) by default.
+methods <- make.method(impute_data)
+methods
+
+# (Optional) You can manually specify methods, e.g.:
+# methods["differ"] <- "polyreg"   # for a factor with >2 levels
+# methods["nodes"]  <- "pmm"       # for numeric
+
+# 4. Run multiple imputation
+imp <- mice(data = impute_data,
+            m = 5,            # number of imputed datasets
+            method = methods, # or your customized methods
+            maxit = 5,        # number of iterations
+            seed = 123)       # for reproducibility
+
+# 5. Choose one of the imputed sets (1 to 5) to create a completed dataset
+completed_data <- complete(imp, 1)
+
+# 6. Assign the imputed columns back to your main dataset
+colon_data$nodes   <- completed_data$nodes
+colon_data$differ  <- completed_data$differ
+```
+### 3.3 Outlier & Skewness Handling
+nodes is heavily skewed. We can log-transform it if we want to treat it as a continuous covariate.
+
+```{r}
+### 3.3 Outlier & Skewness Handling
+
+# Create a log-transformed version of 'nodes'
+# Adding +1 avoids log(0)
+colon_data$log_nodes <- log(colon_data$nodes + 1)
+
+
+# Function to return a list with lower and upper bounds
+get_iqr_bounds <- function(x) {
+  Q1 <- quantile(x, 0.25, na.rm = TRUE)
+  Q3 <- quantile(x, 0.75, na.rm = TRUE)
+  IQR_val <- Q3 - Q1
+  lower_bound <- Q1 - 1.5 * IQR_val
+  upper_bound <- Q3 + 1.5 * IQR_val
+  return(list(lower = lower_bound, upper = upper_bound))
+}
+
+# Let's apply it to 'age', 'time', and 'nodes'
+vars_to_check <- c("age","nodes")
+bounds_list <- lapply(vars_to_check, function(v) {
+  get_iqr_bounds(colon_data[[v]])
+})
+names(bounds_list) <- vars_to_check
+
+bounds_list
+# This will print the lower/upper bound for each variable
+
+### 3.3.2 Flag Outliers
+
+for (v in vars_to_check) {
+  lb <- bounds_list[[v]]$lower
+  ub <- bounds_list[[v]]$upper
+  outlier_col_name <- paste0("outlier_", v)
+  
+  colon_data[[outlier_col_name]] <- ifelse(colon_data[[v]] < lb | 
+                                           colon_data[[v]] > ub, 1, 0)
+}
+
+# Check how many outliers in each variable
+table(colon_data$outlier_age)
+table(colon_data$outlier_time)
+table(colon_data$outlier_nodes)
+
+for (v in vars_to_check) {
+  lb <- bounds_list[[v]]$lower
+  ub <- bounds_list[[v]]$upper
+  cap_col_name <- paste0(v, "_wins")
+  
+  # Winsorize the variable
+  colon_data[[cap_col_name]] <- pmin(pmax(colon_data[[v]], lb), ub)
+}
+# Inspect results
+summary(colon_data[, c("nodes","log_nodes","nodes_wins", "age_wins","age")])
+```
+
+## Summary of Data Preprocessing
+
+### 1. Multiple Imputation (MICE)
+- Created 5 imputed datasets for missing values in `nodes` and `differ`.
+- Used one completed dataset (`complete(imp, 1)`) for exploration.
+- **Key Point**: For final analysis, pool results across all imputations.
+
+### 2. Outlier Detection (IQR)
+- **Age**: Lower bound = 29, Upper bound = 93.
+  - 16 outliers (<29); max age = 85 (within bounds).
+- **Nodes**: Lower bound = -1, Upper bound = 11.
+  - 81 outliers (>11).
+- **Interpretation**: Outliers may be clinically valid (e.g., many lymph nodes or young patients).
+
+### 3. Capping & Log Transforms
+- **Winsorizing**:
+  - `age_wins`: Capped at 29 (min) and 85 (max).
+  - `nodes_wins`: Capped at 11 (max).
+- **Log Transforms**:
+  - `log_nodes`: Range ≈ 0 to 3.53, reducing skewness.
+- **Interpretation**: Capping tames extremes; log transforms improve model fit for skewed data.
+
+## Define Censoring Variables
+
+### Decide on Your Survival Endpoint
+
+#### A. Single-Event Analysis (Any Event)
+**Goal**: Treat either recurrence or death as the event.
+**Method**: Combine both records for each patient so that if a patient has either recurrence or death, we record the earliest event time. Censor if the patient does not experience any event.
+
+#### B. Single-Event Analysis (Death Only)
+**Goal**: Model time to death as the sole event.
+**Method**: Subset the data to rows where `etype == 2` (death). Censor if the patient has no death record.
+
+#### C. Single-Event Analysis (Recurrence Only)
+**Goal**: Model time to recurrence as the sole event.
+**Method**: Subset the data to rows where `etype == 1` (recurrence). Censor if the patient has no recurrence record.
+
+#### D. Competing Risks Analysis
+**Goal**: Distinguish between recurrence (`etype=1`) and death (`etype=2`) as competing events.
+**Method**: Use a competing risks framework (e.g., `cmprsk` or `mstate` package) rather than the standard `Surv()`.
+
+### Approach A: Single-Event Analysis (Any Event)
+Goal
+- Combine recurrence and death into one “event.”
+- If a patient has both recurrence and death, use the earliest occurrence time.
+- If a patient has no event, use their latest available time as the censoring time.
+
+```{r}
+library(dplyr)
+library(survival)
+
+# A) Any Event
+colon_any_event <- colon_data %>%
+  group_by(id) %>%
+  summarize(
+    # If the patient has at least one event (status == 1), take the earliest event time
+    time = if (any(status == 1)) {
+      min(time[status == 1])
+    } else {
+      # Otherwise, no event => censor at the maximum time
+      max(time)
+    },
+    # Event indicator: 1 if any event, 0 if none
+    status = if (any(status == 1)) 1 else 0
+  ) %>%
+  ungroup()
+
+# Create a Surv object for "any event"
+colon_any_event$surv_any <- Surv(colon_any_event$time, colon_any_event$status)
+
+# Example usage:
+# fit_any <- survfit(surv_any ~ 1, data = colon_any_event)
+# summary(fit_any)
+
+
+```
+
+### Approach B: Single-Event Analysis (Death Only)
+- Goal: Model time to death.
+- Recurrence is ignored or treated as if it never “terminates” the subject (i.e., the patient can still die later).
+- If no death occurs, censor at the maximum time.
+
+```{r}
+# B) Death Only
+colon_death <- colon_data %>%
+  group_by(id) %>%
+  summarize(
+    # Earliest time where status=1 and etype=2
+    time = if (any(status == 1 & etype == 2)) {
+      min(time[status == 1 & etype == 2])
+    } else {
+      max(time)
+    },
+    # Event indicator for death
+    status = if (any(status == 1 & etype == 2)) 1 else 0
+  ) %>%
+  ungroup()
+
+colon_death$surv_death <- Surv(colon_death$time, colon_death$status)
+
+# Example usage:
+# fit_death <- survfit(surv_death ~ 1, data = colon_death)
+# summary(fit_death)
+
+```
+
+### Approach C: Single-Event Analysis (Recurrence Only)
+- Goal: Model time to recurrence.
+- Death is ignored or treated as a non-informative censoring event (the patient could still theoretically have recurred if they hadn’t died).
+- If no recurrence, censor at the maximum time.
+
+```{r}
+# C) Recurrence Only
+colon_recur <- colon_data %>%
+  group_by(id) %>%
+  summarize(
+    # Earliest time where status=1 and etype=1
+    time = if (any(status == 1 & etype == 1)) {
+      min(time[status == 1 & etype == 1])
+    } else {
+      max(time)
+    },
+    # Event indicator for recurrence
+    status = if (any(status == 1 & etype == 1)) 1 else 0
+  ) %>%
+  ungroup()
+
+colon_recur$surv_recur <- Surv(colon_recur$time, colon_recur$status)
+
+# Example usage:
+# fit_recur <- survfit(surv_recur ~ 1, data = colon_recur)
+# summary(fit_recur)
+
+```
+
+### Approach D: Competing Risks (Recurrence vs. Death)
+- Goal: Treat recurrence (etype=1) and death (etype=2) as distinct, competing events.
+- Once one event occurs, the other can’t happen (i.e., no second event).
+- Use a specialized package like cmprsk or mstate.
+
+```{r}
+# install.packages("cmprsk") # if not installed
+library(cmprsk)
+
+```
+
+```{r ,message=FALSE, warning=FALSE}
+colon_cr <- colon_data %>%
+  group_by(id) %>%
+  summarize(
+    # If there's any event, pick the earliest time
+    time = if (any(status == 1)) {
+      min(time[status == 1])
+    } else {
+      max(time)  # no event => censor at max time
+    },
+    # Determine which event happened first
+    fstatus = case_when(
+      # If earliest event was recurrence
+      any(status == 1 & etype == 1 & time[status == 1 & etype == 1] == min(time[status == 1])) ~ 1,
+      # If earliest event was death
+      any(status == 1 & etype == 2 & time[status == 1 & etype == 2] == min(time[status == 1])) ~ 2,
+      TRUE ~ 0  # no event
+    )
+  ) %>%
+  ungroup()
+
+# Merge 'rx' or other covariates so we can compare groups
+colon_cr <- colon_cr %>%
+  left_join(distinct(select(colon_data, id, rx)), by = "id")
+
+# cencode = 0 indicates censored state
+# group = colon_cr$rx to compare incidence curves by treatment group
+cuminc_result <- cuminc(
+  ftime = colon_cr$time,
+  fstatus = colon_cr$fstatus,
+  group = colon_cr$rx, 
+  cencode = 0
+)
+
+cuminc_result
+# This prints cumulative incidence estimates for each event type (1 or 2),
+# stratified by 'rx' if provided.
+
+plot(cuminc_result, xlab = "Days", ylab = "Cumulative Incidence",
+     curvlab = c("Recurrence in Obs", "Recurrence in Lev", 
+                 "Recurrence in Lev+5FU", 
+                 "Death in Obs", "Death in Lev", 
+                 "Death in Lev+5FU"))
+
+
+```
+## Understanding the Output
+
+### 1. Gray’s Test
+- **stat = 2.04699, p-value = 0.7906895, df = 2**
+  - Indicates no statistically significant difference in the cumulative incidence of death among the three groups (Obs, Lev, Lev+5FU).
+  - A p-value of ~0.79 is quite high, well above typical significance thresholds (e.g., 0.05).
+
+### 2. Estimates and Variances ($est and $var)
+- The table under `$est` shows cumulative incidence values at specific time points (500, 1000, 1500, 2000, 2500, 3000 days).
+- Rows (e.g., "Obs 2", "Lev 2", "Lev+5FU 2") correspond to Event = 2 (death) in each treatment group.
+- Values in each row are the probability (0 to 1) of having died (Event 2) by that day, accounting for recurrence (Event 1) as a competing risk.
+  - For instance, at 3000 days for "Obs 2", you see 0.161825, meaning about 16.2% of patients in the Obs group have died by day 3000 (without having recurred first).
+
+### The Plot: Cumulative Incidence Curves
+The plot has six lines in total (Recurrence in Obs/Lev/Lev+5FU and Death in Obs/Lev/Lev+5FU). Focusing on death:
+- **Death in Obs** (solid or dashed line labeled “Death in Obs”)
+- **Death in Lev**
+- **Death in Lev+5FU**
+
+Each line shows how the probability of death (accounting for competing risk of recurrence) evolves over time. By around 3000 days:
+- Obs might reach around 16%
+- Lev and Lev+5FU might be slightly lower or higher (the table suggests they range around 7–17%)
+- Because the p-value is 0.79, these differences are not statistically significant.
+
+### Interpretation & Conclusions
+
+#### No Significant Group Difference for Death
+- Gray’s test p-value = 0.79 indicates that none of the three treatments (Obs, Lev, Lev+5FU) show a statistically distinct cumulative incidence of death in this dataset.
+- Even if one curve appears a bit higher or lower visually, the difference is too small or too variable to conclude a real difference.
+
+#### Magnitude of Incidence
+- By day 3000, the cumulative incidence of death is in the ballpark of 10–16% across groups.
+- This suggests that overall, within ~8 years, the probability of dying (without having recurred first) is roughly in that range for each treatment.
+
+#### Recurrence vs. Death
+- You also have lines for recurrence in the same plot. Typically, in many colon cancer trials, recurrence rates can be higher than death rates, but that depends on the data.
+- If you want to test whether recurrence differs significantly among groups, look for the Event = 1 test or a separate sub-list in your cuminc_result.
+
+#### Clinical Perspective
+- If the research question was “Does Lev or Lev+5FU reduce the probability of death compared to Obs?”, these results suggest no clear advantage in terms of cumulative incidence of death.
+- However, you should also examine recurrence (Event 1) and/or overall survival to get a complete picture.
+
+## Step 4: Perform Descriptive Analysis
+We will perform descriptive analysis by visualizing the distribution of survival times and covariates.
+
+```{r}
+# Summary of raw survival times
+summary(colon_data$time)
+# How many patients had an event vs. censored
+table(colon_data$status)        
+# Summaries of numeric variables
+summary(colon_data$age)
+summary(colon_data$nodes)
+summary(colon_data$log_nodes)
+
+# Factor (Categorical) Covariates
+# Treatment groups
+table(colon_data$rx)
+
+# Sex distribution
+table(colon_data$sex)
+
+# Tumor differentiation
+table(colon_data$differ)
+
+# Extent of disease
+table(colon_data$extent)
+
+# Compare a covariate to the event status
+table(colon_data$rx, colon_data$status)
+table(colon_data$sex, colon_data$status)
+
+# Summary Tables with dplyr or tableone
+colon_data %>%
+  summarize(
+    N = n(),
+    MedianTime = median(time, na.rm = TRUE),
+    MeanTime = mean(time, na.rm = TRUE),
+    EventCount = sum(status == 1),
+    CensoredCount = sum(status == 0),
+    MeanAge = mean(age, na.rm = TRUE),
+    # Add more as needed
+  )
+
+library(tableone)
+
+vars <- c("time", "age", "nodes", "sex", "differ")
+tab1 <- CreateTableOne(vars = vars, strata = "rx", data = colon_data)
+print(tab1, showAllLevels = TRUE)
+
+```
+## Overall Dataset Summary
+
+### Total Observations (N): 1858
+
+#### Events vs. Censored:
+- **920 events** (status = 1)
+- **938 censored** (status = 0)
+- This is almost an even split (about 49.5% events).
+
+#### Survival Time (time)
+- **Median**: 1855 days (~5.1 years)
+- **Mean**: 1537 days (~4.2 years)
+- **Range**: 8 to 3329 days
+- The mean is lower than the median, indicating a right-skewed distribution.
+
+#### Age
+- **Median**: 61 years
+- **Range**: 18 to 85 years
+- **Mean**: around 59.75 years.
+
+#### Nodes
+- **Median**: 2
+- **Mean**: 3.66
+- **Range**: 0 to 33 (indicating some patients have many positive lymph nodes).
+
+#### Tumor Differentiation (differ)
+- **Well**: 191 patients
+- **Moderate**: 1360 patients
+- **Poor**: 307 patients
+- Most tumors are moderately differentiated.
+
+#### Extent of Disease (extent)
+- **Submucosa**: 42
+- **Muscle**: 212
+- **Serosa**: 1518
+- **Contiguous**: 86
+- The majority (over 80%) are serosa involvement.
+
+## By Treatment Group (rx)
+We have three groups: Obs, Lev, and Lev+5FU. A stratified summary shows:
+
+| Group   | N   | Mean Time (SD)     | Mean Age (SD) | Mean Nodes (SD) | % Female | p-values       |
+|---------|-----|---------------------|---------------|-----------------|----------|----------------|
+| Obs     | 630 | 1440.61 (929.15)    | 59.45 (11.46) | 3.80 (3.71)     | ~52%     | Time < 0.001   |
+| Lev     | 620 | 1639.63 (961.71)    | 59.91 (10.89) | 3.69 (3.60)     | ~43%     | Age < 0.001    |
+| Lev+5FU | 608 | 1716.50 (102?.??)   | 60.76 (12.25) | 3.62 (3.59)     | ~54%     | Nodes = 0.616  |
+
+
+### Key Observations
+
+#### Time:
+- Lev+5FU has the highest average time (~1716 days). Obs has the lowest (~1441 days).
+- p-value < 0.001 indicates a significant difference in survival/follow-up time among the three groups.
+
+#### Age:
+- Lev+5FU group is slightly older on average (60.76) compared to Obs (59.45).
+- p-value < 0.001 suggests a significant age difference among the groups.
+
+#### Nodes:
+- Means range from 3.62 to 3.80; p-value = 0.616 shows no significant difference among groups.
+
+#### Sex:
+- ~52% Female in Obs vs. ~43% in Lev vs. ~54% in Lev+5FU. p-value = 0.616 suggests no significant difference among groups.
+
+#### Differentiation (differ):
+- p-value = 0.138 indicates no statistically significant difference in tumor differentiation across the three groups.
+
+### Interpretation:
+- Time and Age differ significantly among treatment arms, but Nodes, Sex, and Differ do not.
+- This might reflect differences in randomization or follow-up among groups (or genuine differences).
+- Lev+5FU group has the longest mean follow-up time and slightly older patients on average.
+
+## Event vs. Censoring by Group
+From the tables:
+
+- **Obs**: 285 censored, 345 events
+- **Lev**: 287 censored, 333 events
+- **Lev+5FU**: 366 censored, 242 events
+
+### Interpretation:
+- Lev+5FU shows more censored patients than events (366 vs. 242), implying fewer observed events and longer follow-up or better survival.
+- Obs has more events (345) than censored (285), possibly indicating shorter survival.
+- (Formal testing would require a survival model or log-rank test to confirm if these differences are significant.)
+
+```{r}
+##################################################
+#  Load Necessary Packages
+##################################################
+suppressWarnings({
+  if (!require("ggplot2")) install.packages("ggplot2", dependencies=TRUE)
+  library(ggplot2)
+})
+
+##################################################
+#  1. Histogram of Survival Time (Any Event)
+##################################################
+ggplot(colon_data, aes(x = time)) + 
+  geom_histogram(binwidth = 100, fill = "steelblue", color = "black") +
+  labs(
+    title = "Distribution of Survival Times (Any Event)",
+    x = "Days",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+##################################################
+#  2. Boxplot of Survival Time by Treatment Group
+##################################################
+ggplot(colon_data, aes(x = rx, y = time, fill = rx)) + 
+  geom_boxplot() +
+  labs(
+    title = "Survival Time by Treatment Group",
+    x = "Treatment",
+    y = "Days"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")  # Hide redundant legend
+
+##################################################
+#  3. Boxplot of Survival Time by Tumor Differentiation
+##################################################
+ggplot(colon_data, aes(x = differ, y = time, fill = differ)) + 
+  geom_boxplot() +
+  labs(
+    title = "Survival Time by Tumor Differentiation",
+    x = "Tumor Differentiation",
+    y = "Days"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+##################################################
+#  4. (Optional) Distribution of Time to Recurrence
+##################################################
+# Only run this if you have a 'colon_recur' dataset 
+# (subset for recurrence event).
+ggplot(colon_recur, aes(x = time)) + 
+  geom_histogram(binwidth = 100, fill = "blue", color = "black") +
+  labs(
+    title = "Distribution of Time to Recurrence",
+    x = "Days",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+##################################################
+#  5. (Optional) Distribution of Time to Death
+##################################################
+# Only run this if you have a 'colon_death' dataset 
+# (subset for death event).
+ggplot(colon_death, aes(x = time)) + 
+  geom_histogram(binwidth = 100, fill = "red", color = "black") +
+  labs(
+    title = "Distribution of Time to Death",
+    x = "Days",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+##################################################
+#  6. Histogram of Age Distribution
+##################################################
+ggplot(colon_data, aes(x = age)) + 
+  geom_histogram(binwidth = 5, fill = "darkgreen", color = "black") +
+  labs(
+    title = "Age Distribution",
+    x = "Age (Years)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+##################################################
+#  7. Distribution of Lymph Nodes
+##################################################
+ggplot(colon_data, aes(x = nodes)) + 
+  geom_histogram(binwidth = 1, fill = "purple", color = "black") +
+  labs(
+    title = "Distribution of Number of Positive Lymph Nodes",
+    x = "Number of Nodes",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+ggplot(colon_data, aes(x = log_nodes)) + 
+  geom_histogram(binwidth = 0.25, fill = "purple", color = "black") +
+  labs(
+    title = "Distribution of Log-Transformed Lymph Nodes",
+    x = "log(nodes + 1)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+
+```
+## Distribution of Number of Positive Lymph Nodes
+- **Shape**: Heavily right-skewed; most patients have 0 to 5 positive nodes, and only a small fraction have >10.
+- **Interpretation**: Lymph node involvement is typically low for many patients, but some have high node counts (up to ~30+). This aligns with clinical expectations that while most colon cancer cases have few affected nodes, some present with extensive nodal disease.
+
+## Shape of the Distribution
+
+### After Log-Transforming
+- **Fewer Extreme Values**: The high end of the distribution has fewer extreme values.
+- **Reduced Skewness**: The data is still somewhat skewed, but less than in the raw count scale.
+
+### Values on the x-axis (log(nodes + 1))
+- **log(nodes+1) = 0** → nodes = 0
+- **log(nodes+1) = 1** → nodes ≈ 1.72
+- **log(nodes+1) = 2** → nodes ≈ 6.39
+- **log(nodes+1) = 3** → nodes ≈ 19.09
+- **log(nodes+1) = 4** → nodes ≈ 53.60
+
+#### Interpretation
+- **Large Spike Around log(nodes+1) = 0–1**: Many patients have 0–2 positive nodes.
+- **Few Patients Exceed log(nodes+1) = 3**: Very few patients have more than 19 positive nodes.
+
+## Distribution of Survival Times (Any Event)
+- **Overall Range**: Spans from near 0 days up to ~3300 days (over 9 years).
+- **Shape**: Appears multi-modal with peaks around 500, 1000, and 2000 days.
+- **Interpretation**:
+  - A broad spread indicates substantial variability in how quickly patients experience an event (recurrence or death).
+  - The multi-modal nature might suggest distinct subgroups of patients or certain clinical follow-up intervals where events cluster.
+
+## Survival Time by Treatment Group (Boxplot)
+- **Groups**: Obs (observation), Lev, Lev+5FU.
+- **Median Survival**:
+  - Obs: Lower median (around ~1000 days).
+  - Lev: Intermediate median (~1600 days).
+  - Lev+5FU: Higher median (~2000 days).
+- **Spread**:
+  - Lev+5FU has a wider range (top whisker extends beyond 3000 days).
+  - Obs group has many observations below ~1000 days.
+- **Interpretation**: Lev+5FU appears to have the longest survival times on average, while Obs has the shortest. However, this is purely descriptive; formal tests (e.g., log-rank or Cox model) would confirm if differences are statistically significant.
+
+## Survival Time by Tumor Differentiation (Boxplot)
+- **Categories**: Well, Moderate, Poor.
+- **Median Survival**:
+  - Well: Highest median (~2000 days).
+  - Moderate: Intermediate (~1500 days).
+  - Poor: Lowest median (~1000 days).
+- **Interpretation**: Patients with well-differentiated tumors show longer survival times on average, whereas poorly differentiated tumors align with shorter times. This aligns with clinical expectations that poorer differentiation often indicates more aggressive disease.
+
+## Distribution of Time to Recurrence
+- **Range**: Again up to ~3300 days.
+- **Shape**: Multi-modal peaks around 500–600 days and ~2000 days.
+- **Interpretation**:
+  - Recurrence can occur early (within the first year or two) or later (~5+ years).
+  - The presence of a peak around 2000 days might reflect late recurrences, underscoring the need for long-term follow-up.
+
+## Distribution of Time to Death
+- **Range**: 0 to ~3300 days.
+- **Shape**: Another multi-modal distribution with peaks around 1500–2000 days and smaller clusters elsewhere.
+- **Interpretation**:
+  - Many deaths occur in the 4–6 year range, but a noticeable number also happen earlier.
+  - Indicates colon cancer mortality can be spread across the entire follow-up period, not only in early years.
+
+## Age Distribution
+- **Shape**: Roughly bell-shaped (unimodal) with a peak around 60–70 years.
+- **Range**: From ~20 to ~85, with a median ~61 (as noted in your summary stats).
+- **Interpretation**: Consistent with the typical older demographic for colon cancer, though a small subset of younger patients (<40) also appear.
+
+## Overall Observations & Next Steps
+- **Highly Variable Survival Times**: Both for any event and specifically for recurrence or death. Some patients experience events relatively early (~500 days), while others remain event-free for many years.
+- **Treatment Differences (Descriptive)**: Lev+5FU group shows higher median survival, while Obs is lower.
+- **Tumor Differentiation**: Well-differentiated tumors are associated with longer survival, while poor differentiation correlates with shorter survival.
+
+
+
+## Estimate survival functions using Kaplan-Meier curves
+
+Research Question Focus
+When conducting survival analysis, it's common to start with the main predictor and time-to-event. Here's a structured approach:
+
+Initial Analysis:
+
+Main Predictor: Focus on the primary variable of interest, such as the treatment group (rx).
+Time-to-Event: Analyze the time until the event occurs (e.g., recurrence or death).
+Simpler Models:
+
+Kaplan-Meier Curves: Begin with Kaplan-Meier survival curves stratified by the main predictor (e.g., treatment group). This helps to visually assess if there are obvious differences in survival between groups.
+Adding Covariates:
+
+Cox Proportional Hazards Model: Once you have a sense of the survival differences, incorporate additional covariates (e.g., age, sex, nodes, obstruct) into a Cox model. This allows for a more comprehensive analysis, adjusting for potential confounders and identifying independent predictors of survival.
+```{r}
+#  If We already merged data into a single row per patient (Approach A)
+# For "any event"
+# Surv object:
+colon_any_event$surv_any <- Surv(time = colon_any_event$time,
+                                  event = colon_any_event$status)
+```
+
+```{r}
+# Surv object with original data (assuming one row per patient)
+colon_data$surv_obj <- Surv(time = colon_data$time, event = colon_data$status)
+```
+
+```{r}
+# Using the Surv object in colon_data
+fit_km_rx <- survfit(surv_obj ~ rx, data = colon_data)
+
+# Print a summary of the fit
+summary(fit_km_rx)
+
+```
+
+```{r}
+plot(fit_km_rx, 
+     xlab = "Days", 
+     ylab = "Survival Probability", 
+     col = c("blue", "red", "green"), 
+     lty = 1:3,
+     main = "Kaplan-Meier Curves by Treatment Group")
+
+legend("bottomleft",
+       legend = levels(colon_data$rx),
+       col = c("blue", "red", "green"),
+       lty = 1:3)
+
+```
+
+```{r}
+library(survminer)
+ggsurvplot(
+  fit = fit_km_rx,
+  data = colon_data,
+  risk.table = TRUE,       # show number at risk table
+  pval = TRUE,             # show p-value from log-rank test
+  ggtheme = theme_minimal(),
+  title = "Kaplan-Meier Curves by Treatment Group",
+  xlab = "Days",
+  ylab = "Survival Probability"
+)
+
+```
+
+```{r}
+logrank_test_rx <- survdiff(surv_obj ~ rx, data = colon_data)
+logrank_test_rx
+```
+## Kaplan-Meier Curves by Treatment
+
+### KM Plots (Base R and survminer)
+- **Lev+5FU (green/dotted)**: Appears to have the highest survival curve over time.
+- **Obs (blue/solid)**: Seems to have the lowest curve.
+- **Lev (red/dashed)**: Is in between.
+
+### Survival Probabilities (from the survfit summary)
+- For each time point, you see columns for survival, std.err, and 95% CI.
+- At early times (like ~50 days), survival is ~0.99 or higher across groups.
+- By later times (~3000 days), survival probabilities diverge, with Lev+5FU typically retaining higher survival.
+
+### Interpretation
+- Visually, Lev+5FU group experiences fewer (or later) events, while the Obs group experiences more (or earlier) events.
+- This pattern suggests Lev+5FU might be more effective at delaying the event (recurrence or death).
+
+## Log-Rank Test
+- **Chi-square = 33.6 on 2 degrees of freedom, p = 5e-08 (~0.00000005)**
+  - This is a highly significant result (< 0.0001), indicating that at least one survival curve differs from the others.
+
+### From the table:
+| Group   | N (Total) | Observed Events | Expected Events |
+|---------|-----------|-----------------|-----------------|
+| Obs     | 630       | 345             | 299             |
+| Lev     | 620       | 333             | 295             |
+| Lev+5FU | 608       | 242             | 286             |
+
+- **Obs**: Has more events than expected (345 vs. 299), consistent with lower survival.
+- **Lev+5FU**: Has fewer events than expected (242 vs. 286), consistent with better survival.
+- **Lev**: Is intermediate.
+
+### Interpretation
+- The p-value is extremely small, so we can reject the null hypothesis that all three groups have the same survival function.
+- In plain language: Treatment significantly affects time to event (the combined outcome).
+
+## Practical Takeaways
+- **Lev+5FU**: Appears to provide a survival advantage, while Obs is least effective.
+- **Lev**: Is in between but closer to Obs, based on the shape of the curves and the number of events.
+
+### Manual Pairwise Log-Rank Tests
+
+```{r}
+# Pair 1: Obs vs Lev
+survdiff(Surv(time, status) ~ rx,
+         data = colon_data,
+         subset = (rx %in% c("Obs", "Lev")))
+
+# Pair 2: Obs vs Lev+5FU
+survdiff(Surv(time, status) ~ rx,
+         data = colon_data,
+         subset = (rx %in% c("Obs", "Lev+5FU")))
+
+# Pair 3: Lev vs Lev+5FU
+survdiff(Surv(time, status) ~ rx,
+         data = colon_data,
+         subset = (rx %in% c("Lev", "Lev+5FU")))
+
+```
+## Pairwise Comparisons of Treatment Groups
+
+### Obs vs Lev
+- **p = 0.8**: Suggests no statistical difference in survival curves between Observation alone and Levamisole (Lev).
+- **Interpretation**: Visually or clinically, these two groups appear quite similar in how quickly events occur.
+
+### Obs vs Lev+5FU
+- **p = 1 × 10⁻⁷**: Indicates a highly significant difference.
+- **Interpretation**: Lev+5FU outperforms Obs, implying better survival (fewer/farther events).
+
+### Lev vs Lev+5FU
+- **p = 6 × 10⁻⁷**: Also indicates a highly significant difference.
+- **Interpretation**: Lev+5FU outperforms Lev, again suggesting better survival.
+
+### Summary
+- **Lev+5FU**: Significantly better than both Obs and Lev, suggesting it provides a survival advantage.
+- **Obs and Lev**: Not significantly different from each other, indicating similar survival outcomes.
+
+These results highlight the effectiveness of Lev+5FU in improving survival compared to the other treatment groups.
+
+###########################################################################################
+## Kaplan-Meier Curves (Time to Death)
+
+```{r}
+# 1) Summarize time/status for death
+colon_death <- colon_data %>%
+  group_by(id) %>%
+  summarize(
+    time = if (any(status == 1 & etype == 2)) {
+      min(time[status == 1 & etype == 2])
+    } else {
+      max(time)
+    },
+    status = if (any(status == 1 & etype == 2)) 1 else 0
+  ) %>%
+  ungroup()
+
+# 2) Merge 'rx' from 'colon_data'
+colon_death <- colon_death %>%
+  left_join(
+    select(colon_data, id, rx),
+    by = "id"
+  ) %>%
+  distinct(id, .keep_all = TRUE)
+
+# Now 'colon_death' should have columns: id, time, status, rx, ...
+str(colon_death)
+
+```
+
+
+```{r}
+# Surv object for time to death
+colon_death$surv_death <- Surv(time = colon_death$time,
+                               event = colon_death$status)
+
+```
+
+```{r}
+# Suppose you want to compare survival by rx (Obs, Lev, Lev+5FU)
+fit_km_death <- survfit(surv_death ~ rx, data = colon_death)
+
+# Print a summary
+summary(fit_km_death)
+
+```
+
+
+```{r}
+plot(fit_km_death,
+     xlab = "Days",
+     ylab = "Survival Probability (Time to Death)",
+     col = c("blue", "red", "green"),
+     lty = 1:3,
+     main = "Kaplan-Meier Curves: Time to Death by Treatment")
+
+legend("bottomleft",
+       legend = levels(colon_death$rx),
+       col = c("blue", "red", "green"),
+       lty = 1:3)
+
+
+ggsurvplot(
+  fit = fit_km_death,
+  data = colon_death,
+  risk.table = TRUE,
+  pval = TRUE,
+  xlab = "Days",
+  ylab = "Survival Probability (Death)",
+  title = "Kaplan-Meier: Time to Death by Treatment",
+  ggtheme = theme_minimal()
+)
+
+```
+
+```{r}
+logrank_death <- survdiff(surv_death ~ rx, data = colon_death)
+logrank_death
+
+```
+```{r}
+survdiff(Surv(time, status) ~ rx, data = colon_death,
+         subset = (rx %in% c("Obs", "Lev")))
+survdiff(Surv(time, status) ~ rx, data = colon_death,
+         subset = (rx %in% c("Obs", "Lev+5FU")))
+survdiff(Surv(time, status) ~ rx, data = colon_death,
+         subset = (rx %in% c("Lev", "Lev+5FU")))
+```
+## Kaplan-Meier Curves (Time to Death)
+
+### 1. Visual Ranking of Survival Curves
+- **Lev+5FU (green/dotted)**: Remains the highest curve (best survival), meaning fewer patients die (or they die later).
+- **Obs (blue/solid)** and **Lev (red/dashed)**: Are closer together. Sometimes one is slightly above the other, but they appear more similar than in the any-event analysis.
+
+### Survival Probabilities Over Time
+- **Early on (first 500–1000 days)**: Survival probabilities are quite high for all three groups.
+- **By ~3000 days**: The curves have separated more clearly, with Lev+5FU maintaining the highest survival and Obs vs. Lev looking fairly close.
+
+### 2. Log-Rank Test for Time to Death
+- **Chi-square = 11.7, p = 0.003**: Indicates a statistically significant difference in time to death among the three groups.
+
+#### Interpretation of Observed vs. Expected:
+- **Obs**: 168 deaths observed vs. 148 expected, indicating more deaths than expected under a null (no-difference) scenario.
+- **Lev**: Also has more observed than expected.
+- **Lev+5FU**: Presumably has fewer observed than expected, aligning with better survival.
+
+### 3. Comparison with “Any Event” Results
+- **Any Event Analysis**: Had an extremely low p-value (~10⁻⁷) because Lev+5FU was drastically better for recurrence and death combined.
+- **Time to Death**: Yields p = 0.003—still significant but less extreme.
+- **Implication**: The difference among treatments is still real for death alone, but the magnitude of separation is somewhat smaller than in the any-event scenario. This suggests Lev+5FU provides a strong advantage particularly for recurrence prevention, though it also improves overall survival compared to the others.
+
+### 4. Do Obs and Lev Differ?
+- The log-rank test is global, so we only know that at least one pair differs.
+- **Visually**: Obs and Lev appear close. You can do pairwise tests (subsetting to (Obs, Lev) only) to see if that difference is statistically significant.
+- **If the p-value is large**: It means Obs vs. Lev are not significantly different in terms of time to death.
+
+#################################################################################
+##  Kaplan-Meier Curves (Time to Recurrence)
+
+```{r}
+# Step 1: Summarize time/status for recurrence
+colon_recur <- colon_data %>%
+  group_by(id) %>%
+  summarize(
+    # Earliest time if (status=1 & etype=1), otherwise max time
+    time = if (any(status == 1 & etype == 1)) {
+      min(time[status == 1 & etype == 1])
+    } else {
+      max(time)
+    },
+    # Recurrence indicator: 1 if event occurred, else 0
+    status = if (any(status == 1 & etype == 1)) 1 else 0
+  ) %>%
+  ungroup()
+
+# Step 2: Merge `rx` from the original data
+colon_recur <- colon_recur %>%
+  left_join(
+    select(colon_data, id, rx),
+    by = "id"
+  ) %>%
+  distinct(id, .keep_all = TRUE)
+
+# Check structure
+str(colon_recur)
+head(colon_recur)
+
+```
+
+```{r}
+# Create a Surv object for time to recurrence
+colon_recur$surv_recur <- Surv(time = colon_recur$time,
+                               event = colon_recur$status)
+
+```
+
+```{r}
+fit_km_recur <- survfit(surv_recur ~ rx, data = colon_recur)
+
+# View a textual summary of survival estimates
+summary(fit_km_recur)
+
+```
+
+```{r}
+plot(fit_km_recur,
+     xlab = "Days",
+     ylab = "Survival Probability (Recurrence)",
+     col = c("blue", "red", "green"),
+     lty = 1:3,
+     main = "Kaplan-Meier: Time to Recurrence by Treatment")
+
+legend("bottomleft",
+       legend = levels(colon_recur$rx),
+       col = c("blue", "red", "green"),
+       lty = 1:3)
+
+ggsurvplot(
+  fit = fit_km_recur,
+  data = colon_recur,
+  risk.table = TRUE,
+  pval = TRUE,  # displays log-rank p-value
+  xlab = "Days",
+  ylab = "Survival Probability (Recurrence)",
+  title = "Kaplan-Meier: Time to Recurrence by Treatment",
+  ggtheme = theme_minimal()
+)
+
+```
+
+```{r}
+logrank_recur <- survdiff(surv_recur ~ rx, data = colon_recur)
+logrank_recur
+```
+```{r}
+# Obs vs Lev
+survdiff(Surv(time, status) ~ rx, data = colon_recur,
+         subset = (rx %in% c("Obs", "Lev")))
+# Obs vs Lev+5FU
+survdiff(Surv(time, status) ~ rx, data = colon_recur,
+         subset = (rx %in% c("Obs", "Lev+5FU")))
+# Lev vs Lev+5FU
+survdiff(Surv(time, status) ~ rx, data = colon_recur,
+         subset = (rx %in% c("Lev", "Lev+5FU")))
+
+```
+## Kaplan-Meier Curves (Time to Recurrence)
+
+### 1. Visual Ranking
+- **Lev+5FU (green/dotted)**: Shows the highest curve, meaning fewer patients recurred (or they recurred later).
+- **Obs (blue/solid)** and **Lev (red/dashed)**: Appear lower, indicating earlier or more frequent recurrences.
+
+### Recurrence-Free Survival Probability
+- **Early on (first 500–1000 days)**: Survival probabilities (i.e., no recurrence) are fairly high in all groups.
+- **By ~3000 days**: Lev+5FU remains clearly above 0.40, while Obs and Lev dip lower, indicating a higher proportion of patients in the Lev+5FU group remain recurrence-free over time.
+
+### Interpretation
+- **Lev+5FU**: Appears to be most effective at delaying or preventing recurrence.
+- **Obs vs. Lev**: Are closer to each other, though you’d need pairwise tests to see if that difference is significant.
+
+## Log-Rank Test for Time to Recurrence
+- **Chi-Square = 23.1, p = 1e-05 (~0.00001)**
+  - This is highly significant, indicating that at least one group’s recurrence-free survival differs from the others.
+
+### Observed vs. Expected
+- **Obs**: 177 recurrences observed vs. 151 expected → more recurrences than expected (worse outcome).
+- **Lev**: 172 vs. 149 → also more recurrences than expected (worse).
+- **Lev+5FU**: 119 vs. 169 → many fewer recurrences than expected (better).
+
+### Interpretation
+- The large difference is primarily driven by Lev+5FU performing significantly better (far fewer recurrences than expected).
+- Obs and Lev have higher observed recurrences than expected, consistent with worse recurrence-free survival.
+
+## Clinical/Practical Meaning
+- **Lev+5FU**: Strong evidence it reduces recurrence compared to the other two treatments.
+- **Obs vs. Lev**: The global log-rank test can’t tell you if they differ significantly from each other; you’d do pairwise tests (e.g., subsetting `rx %in% c("Obs", "Lev")`) to confirm.
+
+## Pairwise Log-Rank Results
+we ran three separate `survdiff` commands with subset to isolate each pair of groups:
+
+### Obs vs Lev
+- **χ² = 0.1, p = 0.9**
+  - No significant difference in recurrence-free survival between Obs and Lev.
+
+### Obs vs Lev+5FU
+- **χ² = 19.1, p = 1 × 10⁻⁵**
+  - Highly significant difference: Lev+5FU is better (fewer recurrences).
+
+### Lev vs Lev+5FU
+- **χ² = 17.7, p = 3 × 10⁻⁵**
+  - Highly significant difference: Lev+5FU is better than Lev.
+
+## Interpretation
+- **Obs vs Lev**:
+  - **p = 0.9**: They do not differ significantly in terms of time to recurrence.
+  - **Practical terms**: Levamisole alone does not provide a statistically significant benefit over observation for preventing recurrence.
+
+- **Obs vs Lev+5FU**:
+  - **p = 1e-05**: Strong evidence that Lev+5FU significantly reduces recurrence compared to observation alone.
+
+- **Lev vs Lev+5FU**:
+  - **p = 3e-05**: Also highly significant; Lev+5FU is much better than Lev alone at preventing recurrence.
+
+### Overall Pattern
+- **Lev+5FU**: Stands out as the only regimen that significantly delays or reduces recurrence.
+- **Obs and Lev**: Are indistinguishable in this dataset for recurrence outcomes (i.e., no significant difference).
+
+## Clinical/Practical Meaning
+- **Lev+5FU**: Is clearly the optimal regimen for preventing recurrence.
+- **Lev alone**: Does not appear to outperform Obs for recurrence-free survival.
+- These findings confirm the global test result (p < 0.0001) was driven by Lev+5FU being significantly superior to both other arms.
+
+
+###################################################################################################
+
+## Cox Proportional Hazards Modeling
+
+## Time to Any Event
+
+### What It Does
+- Combines recurrence and death into a single outcome.
+- If a patient has either event, they’re considered to have “failed” at that time.
+
+### Pros
+- Simple summary of overall treatment failure (recurrence or death).
+- Captures the earliest time a patient experiences any negative outcome.
+
+### Cons
+- No distinction between recurrence and death; you lose details about which event happened.
+- If you care about overall survival specifically, or recurrence specifically, combining them can blur those details.
+
+### When to Choose It
+- We want a broad measure of “treatment failure,” and either recurrence or death is equally critical as an endpoint.
+- Ideal if your research question is: “Does this treatment reduce the chance of any negative event (recurrence or death)?”
+
+## Time to Death (Overall Survival)
+
+### What It Does
+- Only death counts as an event.
+- Recurrence is ignored or treated as censored (the patient is still alive and at risk of eventually dying).
+
+### Pros
+- Clinically straightforward if your main endpoint is overall survival.
+- Often the gold standard in many oncology trials: does the treatment prolong life?
+
+### Cons
+- Doesn’t capture recurrence patterns, which can be clinically important.
+- A patient could recur early but still live for many years, and you’d miss that early recurrence in a time-to-death analysis.
+
+### When to Choose It
+- our primary question is about mortality: “Does the treatment reduce the risk of death?”
+- Overall survival is often used in regulatory approvals and major clinical endpoints.
+
+## Time to Recurrence
+
+### What It Does
+- Recurrence is the event; death is treated as censored (the patient is no longer at risk of recurrence if they die first).
+
+### Pros
+- Lets you focus on disease progression.
+- Particularly important if your key question is about recurrence-free survival or relapse rates.
+
+### Cons
+- If patients die before recurrence, they’re censored, which can introduce bias if death is related to the same disease process.
+- Does not capture overall survival. A treatment might reduce recurrence but not necessarily extend life (or vice versa).
+
+### When to Choose It
+- We care about tumor relapse specifically: “Does the treatment delay or prevent the return of cancer?”
+- Recurrence is a clinically important endpoint (e.g., new metastatic lesions).
+
+
+we choose the first approach !
+
+
+
+## Select Covariates (with Reasons)
+
+### 2.1 Commonly Included Predictors in Colon Cancer
+
+#### rx (Treatment)
+- **Reason**: Primary variable of interest. You want to see how each treatment arm (Obs, Lev, Lev+5FU) affects survival.
+
+#### age (Numeric)
+- **Reason**: Age is a universal risk factor; older patients often have worse outcomes.
+
+#### sex (Male/Female)
+- **Reason**: Sometimes survival differs by sex in colon cancer, though not always strongly.
+
+#### nodes (Number of positive lymph nodes)
+- **Reason**: Very strong prognostic factor in colon cancer. Often right-skewed, so consider log transform if needed.
+
+#### differ (Tumor differentiation: Well, Moderate, Poor)
+- **Reason**: Histological grade can strongly impact prognosis.
+
+#### extent (Extent of local spread: Submucosa, Muscle, Serosa, Contiguous)
+- **Reason**: Deeper invasion often means higher risk.
+
+### 2.2 Optional or Secondary Predictors
+
+#### obstruct, perfor, adhere (0/1)
+- **Reason**: May indicate more complicated surgeries or advanced local disease. Sometimes less commonly included, but can be tested.
+
+#### surg (Short vs. Long interval from surgery to registration)
+- **Reason**: Might matter for follow-up patterns.
+
+#### node4 (>4 positive nodes)
+- **Reason**: A simpler, binary version of nodes. But if you already have the numeric nodes, node4 can be redundant.
+
+### covariate list: 
+
+```{r}
+# Example covariates
+vars <- c("rx", "sex", "age", "log_nodes", "differ", "extent", 
+          "obstruct", "perfor", "adhere", "surg")
+```
+
+###  Create the Surv Object
+
+```{r}
+
+##################################################
+# 1. Load Packages
+##################################################
+# install.packages(c("dplyr", "survival"))
+library(dplyr)
+library(survival)
+
+##################################################
+# 2. Summarize to Create "colon_any_event"
+#    One Row per Patient, Earliest Event Time
+##################################################
+colon_any_event <- colon_data %>%
+  group_by(id) %>%
+  summarize(
+    # If a patient has any event (status == 1),
+    # take the earliest time of that event.
+    # Otherwise, if no event, use max time (censored).
+    time = if (any(status == 1)) {
+      min(time[status == 1])
+    } else {
+      max(time)
+    },
+    status = if (any(status == 1)) 1 else 0
+  ) %>%
+  ungroup()
+
+##################################################
+# 3. Left Join Covariates from Original Data
+##################################################
+# Select the covariates you want to keep:
+# e.g., rx, age, sex, nodes, differ, extent, obstruct, perfor, adhere, surg
+colon_any_event <- colon_any_event %>%
+  left_join(
+    select(colon_data, 
+           id, rx, age, sex, log_nodes, nodes, differ, extent,
+           obstruct, perfor, adhere, surg),
+    by = "id"
+  ) %>%
+  # If 'colon_data' had multiple rows per id,
+  # distinct() ensures we keep only one row per patient
+  distinct(id, .keep_all = TRUE)
+
+# Check structure to confirm covariates are present
+str(colon_any_event)
+head(colon_any_event)
+
+##################################################
+# 4. Create the Surv Object (Time to Any Event)
+##################################################
+colon_any_event$surv_any <- Surv(colon_any_event$time,
+                                 colon_any_event$status)
+
+```
+
+
+
+### Univariable Cox Models in a Loop
+
+```{r}
+# Function to run univ Cox and extract tidy results
+univ_results <- lapply(vars, function(v) {
+  # Build a formula like: Surv(time, status) ~ var
+  form <- as.formula(paste("surv_any ~", v))
+  
+  # Fit univariable Cox model
+  fit <- coxph(form, data = colon_any_event)
+  
+  # Tidy results with broom
+  res <- tidy(fit, conf.int = TRUE) %>%
+    mutate(variable = v)  # keep track of which var
+  return(res)
+})
+
+# Combine into one data frame
+univ_results_df <- do.call(rbind, univ_results)
+
+# Add columns for Hazard Ratio (HR) and 95% CI
+univ_results_df <- univ_results_df %>%
+  mutate(HR = exp(estimate),
+         HR_lower = exp(conf.low),
+         HR_upper = exp(conf.high))
+```
+### Visualize Univariable Results with ggplot2
+
+```{r}
+# Print table of univ results
+print(univ_results_df)
+
+# Forest plot with ggplot2
+ggplot(univ_results_df, aes(x = variable, 
+                            y = HR, 
+                            ymin = HR_lower, 
+                            ymax = HR_upper)) +
+  geom_pointrange() +
+  geom_hline(yintercept = 1, linetype = 2, color = "red") +
+  coord_flip() +
+  scale_y_log10() +
+  labs(
+    x = "Covariate",
+    y = "Hazard Ratio (log scale)",
+    title = "Univariable Cox PH - Time to Any Event"
+  ) +
+  theme_minimal()
+```
+## Univariate Analysis Findings
+
+### From the Forest Plot and Univariable Table
+
+#### Covariates with p < 0.05:
+- **log_nodes**: Highly significant (HR > 1).
+- **rxLev+5FU**: Significantly reduces hazard (HR < 1).
+- **Possibly obstruct borderline or surg borderline**: Depending on your exact p-values.
+
+#### Covariates with p ≥ 0.05:
+- Some, like **sex**, **perfor**, or **adhere**, may not be statistically significant in univariable testing.
+- Others, like **extent** or **differ**, might have partial significance depending on how the factor levels are compared (some levels can be borderline).
+
+### Interpretation
+- **log_nodes**: Stands out as a strong predictor; more nodes → higher hazard.
+- **rxLev+5FU**: Consistently shows hazard < 1, meaning improved survival relative to rxObs.
+
+### Code to Filter Significant Variables 
+
+```{r}
+# Suppose your univ results are in univ_results_df
+sig_vars <- univ_results_df %>%
+  filter(p.value < 0.05) %>%
+  pull(variable)
+
+sig_vars
+
+```
+
+### Build the Initial Multivariable Cox Model
+
+```{r}
+# including "rx"       "log_nodes"    "differ"   "extent"   "extent"   "obstruct" "adhere"   "surg"  
+cox_model <- coxph(
+  Surv(time, status) ~ rx + obstruct + log_nodes + differ + extent + adhere + surg,
+  data = colon_any_event
+)
+summary(cox_model)
+
+```
+## Building the Multivariable Cox Model
+
+### Combined Covariates:
+- **rx** (main treatment factor)
+- **log_nodes** (since it’s strongly significant)
+- **obstruct**, **differ**, **extent**, **adhere**, **surg** (some are borderline or clinically relevant)
+
+### Significant Variables (p < 0.05):
+- **rxLev+5FU**: HR ≈ 0.62 → ~38% reduction in hazard vs. rxObs.
+- **log_nodes**: HR ≈ 1.91 → Each log-unit increase in nodes nearly doubles the hazard.
+- **extentContiguous**: HR ≈ 2.88 → Markedly higher hazard for contiguous spread vs. baseline category (likely Submucosa or whichever is reference).
+- **surgLong**: HR ≈ 1.31 → “Long” interval from surgery to registration is associated with ~31% higher hazard.
+
+### Borderline:
+- **obstructYes**: p ~ 0.055.
+- **differPoor**: p ~ 0.10.
+
+### Not Significant:
+- **rxLev**: p = 0.63 → Not significantly different from rxObs.
+- **differModerate**, **extentMuscle**, **extentSerosa**, **adhereYes**.
+
+### Interpretation:
+- **rxLev+5FU**: Shows a significant reduction in hazard, indicating improved survival compared to rxObs.
+- **log_nodes**: Strong predictor; more nodes → higher hazard.
+- **extentContiguous**: Indicates a markedly higher hazard for contiguous spread.
+- **surgLong**: Suggests a higher hazard associated with a longer interval from surgery to registration.
+- **Borderline and Not Significant Variables**: These may not have a strong impact on survival in this model, but could be clinically relevant in other contexts
+
+## Check Cox PH Assumption
+
+```{r}
+ph_test <- cox.zph(cox_model)
+ph_test
+plot(ph_test)
+```
+## Proportional Hazards Assumption Violation
+
+### Global Test
+- **p = 5.0e-06**: Overall, the model violates proportional hazards.
+
+### Covariates with p < 0.05 in PH Test:
+- **obstruct** (p = 0.0070)
+- **log_nodes** (p = 0.0073)
+- **differ** (p = 1.1e-06)
+
+This means obstruct, log_nodes, and differ show evidence that their hazard ratios change over time. The plotted scaled Schoenfeld residuals (like for log_nodes or differ) might show a non-horizontal trend.
+
+### Interpretation
+- The PH assumption is violated for these covariates.
+
+### Potential Solutions:
+- **Stratify on obstruct or differ**: If they’re key categorical variables.
+- **Time-varying approach for log_nodes**: If it strongly changes over time.
+- **Check if recoding or grouping factor levels helps**: Simplifying categories might reduce violations.
+- **Evaluate whether you still want to keep them in the model**: If the violation is moderate, consider the trade-offs.
+
+## Visual Inspection of Residual Plots
+
+### Schoenfeld Residual Plots for Each Variable
+
+#### rx
+- **Observation**: The fitted line is fairly flat around 0.
+- **Interpretation**: No major PH violation for rx.
+
+#### obstruct
+- **Observation**: Some drift over time.
+- **Interpretation**: This aligns with the p = 0.007 in the PH test.
+
+#### log_nodes
+- **Observation**: Slight slope or curvature in the fitted line.
+- **Interpretation**: This might be mild or moderate.
+
+#### differ
+- **Observation**: Possibly a noticeable downward trend.
+- **Interpretation**: Indicates time-dependent effects.
+
+#### extent
+- **Observation**: Fairly horizontal.
+- **Interpretation**: No big violation.
+
+#### adhere, surg
+- **Observation**: Also appear fairly stable.
+- **Interpretation**: No major PH violations.
+
+### Summary
+- **rx**: No major PH violation.
+- **obstruct**: Shows some drift, indicating a potential violation.
+- **log_nodes**: Mild to moderate violation.
+- **differ**: Indicates time-dependent effects.
+- **extent, adhere, surg**: No significant violations.
+
+##  Check Linearity for Numeric Variables
+
+```{r}
+resid_mart <- residuals(cox_model, type = "martingale")
+
+# For 'nodes'
+plot(colon_any_event$nodes, resid_mart,
+     xlab = "nodes", ylab = "Martingale Residuals")
+abline(h = 0, col = "red")
+
+# For 'age'
+plot(colon_any_event$age, resid_mart,
+     xlab = "age", ylab = "Martingale Residuals")
+abline(h = 0, col = "red")
+
+```
+## Nodes Plot
+
+### Observations:
+- Many points are near 0 for node counts under ~10, then some outliers for high node counts (20–30+).
+- Possibly a mild negative slope for low node values, but the main cluster is near 0.
+- High node counts (above ~10) are relatively sparse but some negative residuals.
+
+### Interpretation:
+- The overall pattern doesn’t show a strong curve, but there is a cluster effect from so many low node counts.
+- we’ve already log-transformed nodes (log_nodes), which typically helps with the skew. This plot suggests it’s mostly okay, though you have a few outliers at high node counts.
+- No glaring “U-shape” or strong departure from linearity is evident. The log transform is likely addressing the skew effectively.
+
+## Age Plot
+
+### Observations:
+- Points are spread from age ~20 to 85, with a cluster around 50–70.
+- The red line (loess or a simple horizontal) is fairly flat, maybe a slight downward slope for older ages.
+- No strong curvature or obvious pattern.
+
+### Interpretation:
+- No major violation of linearity for age. A gentle slope might exist, but it’s not pronounced.
+- If clinically you suspect age might have a threshold effect (e.g., <50 vs. >70), you could explore a piecewise approach. But from this plot, age seems reasonably linear.
+
+####################################################################################
+
+## Evaluate Model Performance (Harrell’s C-Index)
+
+```{r}
+# Suppose cox_model is  final model
+summary(cox_model)$concordance
+```
+
+##  Alternative: survcomp or pec Packages
+
+```{r}
+library(survcomp)
+# x is your predicted risk from the Cox model (e.g., linear predictor)
+x <- predict(cox_model, type = "lp")
+# Surv object
+S <- with(colon_any_event, Surv(time, status))
+
+cindex_result <- concordance.index(x, surv.time = S[,1], surv.event = S[,2],
+                                   method = "noether")
+cindex_result$c.index
+cindex_result$lower
+cindex_result$upper
+
+```
+## Perform Cross-Validation or Bootstrapping
+Bootstrapping for Robustness
+One common approach is to bootstrap the dataset multiple times and refit the Cox model to estimate the variability of coefficients and the C-index. Here’s a simplified example using the boot package:
+
+```{r, warning=FALSE}
+# install.packages("boot")
+library(boot)
+library(survival)
+
+# 1) Define a function that fits the Cox model and returns the C-index
+cox_boot <- function(data, indices) {
+  d <- data[indices, ]  # bootstrap sample
+  fit <- coxph(Surv(time, status) ~ rx + log_nodes + differ + extent + adhere + surg,
+               data = d)
+  # Return the C-index from summary
+  return(summary(fit)$concordance[1]) 
+}
+
+# 2) Run boot
+set.seed(123)
+boot_res <- boot(data = colon_any_event, statistic = cox_boot, R = 1000) 
+# R=1000 bootstrap replications
+
+# 3) Inspect results
+boot_res
+# 't' contains the bootstrap estimates of C-index
+# you can compute mean, sd, etc.
+
+mean(boot_res$t)   # average C-index across bootstraps
+sd(boot_res$t)     # standard deviation
+
+```
+##  Cross-Validation Approach
+we could do k-fold cross-validation (e.g., caret or cvTools) to split data into folds, train on k-1 folds, and test on the remaining fold. Then compute the C-index or partial log-likelihood on the test fold. Summarize across folds for an estimate of out-of-sample performance.
+```{r}
+cox_cv_cindex <- function(data, formula, k = 5, seed = 123) {
+  set.seed(seed)
+  
+  n <- nrow(data)
+  # Randomly assign each row to a fold (1..k)
+  folds <- sample(rep(1:k, length.out = n))
+  
+  cindex_values <- numeric(k)  # store c-index for each fold
+  
+  for (i in 1:k) {
+    # Split into training vs. test
+    train_data <- data[folds != i, ]
+    test_data  <- data[folds == i, ]
+    
+    # Fit Cox model on training
+    fit <- coxph(formula, data = train_data)
+    
+    # Predict linear predictor (risk score) on test
+    lp_test <- predict(fit, newdata = test_data, type = "lp")
+    
+    # Compute C-index for test set
+    # Survcomp expects vectors: times, events, and predicted scores
+    cindex_result <- concordance.index(
+      x          = lp_test,                    # predicted risk
+      surv.time  = test_data$time,             # actual survival time
+      surv.event = test_data$status,           # actual event
+      method     = "noether"                   # or "uno", "harrell", etc.
+    )
+    
+    cindex_values[i] <- cindex_result$c.index
+  }
+  
+  # Return average C-index and all fold values
+  list(
+    mean_cindex = mean(cindex_values),
+    sd_cindex   = sd(cindex_values),
+    cindex_each_fold = cindex_values
+  )
+}
+
+```
+
+```{r}
+# Define your final formula
+cox_formula <- Surv(time, status) ~ rx + log_nodes + differ + extent + adhere + surg
+
+# Run 5-fold CV
+cv_results <- cox_cv_cindex(data = colon_any_event, formula = cox_formula, k = 5, seed = 123)
+
+cv_results$mean_cindex
+cv_results$sd_cindex
+cv_results$cindex_each_fold
+```
+## 1. In-Sample C-Index from summary(cox_model)
+**Value:** ~0.6724 (SE ~0.0117).
+
+**Interpretation:** On your full dataset, the model can correctly rank pairs of patients ~67% of the time. This is a moderate level of discrimination, typical in many clinical models.
+
+## 2. C-Index via survcomp
+**Value:** ~0.6734 (95% CI: 0.6504–0.6964).
+
+**Interpretation:** This matches closely with the in-sample summary. The confidence interval indicates you can be fairly confident the true c-index lies in the ~0.65–0.70 range.
+
+## 3. Bootstrapped C-Index
+**Value:** ~0.6699 (bias ~0.0027, std. error ~0.012).
+
+**Interpretation:** When you resample (with replacement) 1000 times, the average c-index is ~0.67, reinforcing that your model’s discrimination is stable and not the product of random chance. The std. error is ~0.012, consistent with the original SE ~0.0117.
+
+## 4. 5-Fold Cross-Validation C-Index
+**Mean:** ~0.6582  
+**SD:** ~0.0137  
+**Fold-by-Fold:** [0.6885, 0.6514, 0.6303, 0.7091, 0.6357]
+
+**Interpretation:**
+- **Slightly Lower Than In-Sample (0.6724 → 0.6582):** A small drop is expected due to out-of-sample testing. This indicates mild overfitting, but the difference is not large.
+- **Fold Variability:** The c-index ranges from ~0.63 to ~0.71 across folds, giving a standard deviation ~0.014. This is moderate and suggests the model’s performance is fairly consistent across data splits.
+- **Conclusion:** A cross-validated c-index around 0.66 (±0.01) confirms moderate discrimination in an out-of-sample setting.
+
+## 5. Overall Conclusions
+- **Consistent Performance:** All methods (in-sample, survcomp, bootstrapping, cross-validation) converge around 0.66–0.67 for the c-index.
+- **Moderate Discrimination:** A c-index in the mid-0.60s is common in medical prognostic models, meaning the model is useful but not perfect.
+- **Model Stability:**
+  - Bootstrapping shows minimal bias and an SE ~0.012, so the estimate is stable.
+  - Cross-Validation c-index is only slightly lower than in-sample, indicating limited overfitting.
+- **Practical Interpretation:** Your Time to Any Event Cox model ranks patients’ risk in a moderate way. In a clinical context, this can still provide valuable prognostic insight, but the model is not extremely high in discrimination.
+################################################################################
+
+## Interpret Model Coefficients and Survival Curves
+
+```{r}
+summary(cox_model)
+```
+## Covariate-by-Covariate Interpretation
+
+### 1. rxLev
+**HR = 0.9505, p = 0.628**  
+Not significantly different from 1. This suggests Lev alone is not significantly better or worse than the reference treatment (likely rx=Obs) for preventing the event.
+
+### 2. rxLev+5FU
+**HR = 0.6181, p = 2.29e-05 (highly significant)**  
+Interpreted as ~38% reduction in hazard relative to the reference group (Obs).  
+In plain language: “Patients on Lev+5FU have significantly lower risk (by ~38%) than those on the reference treatment.”
+
+### 3. obstructYes
+**HR = 1.2337, p = 0.055 (borderline significance)**  
+Suggests a 23% increase in hazard for patients with obstruction vs. those without, but only borderline significant (p ~ 0.055).  
+In plain language: “Having an obstructed colon might slightly raise the risk of recurrence/death, but the evidence is borderline.”
+
+### 4. log_nodes
+**HR = 1.9140, p < 2e-16 (very highly significant)**  
+A 1-unit increase in log(nodes+1) nearly doubles the hazard.  
+In simpler terms: “If (nodes+1) goes up by a factor of $$e^1 = 2.718$$, hazard almost doubles.”  
+In plain language: “The number of positive lymph nodes is a strong predictor—more nodes means a substantially higher risk.”
+
+### 5. differModerate
+**HR = 1.0124, p = 0.938**  
+No significant difference from the reference (likely differ=Well).  
+“Moderate differentiation” doesn’t show a clear effect vs. well-differentiated tumors.
+
+### 6. differPoor
+**HR = 1.3543, p = 0.099 (borderline significance)**  
+Suggests a ~35% increase in hazard vs. well-differentiated, but p ~ 0.10 is borderline.  
+In plain language: “Poorly differentiated tumors may raise risk, but it’s not firmly significant.”
+
+### 7. extentMuscle
+**HR = 1.0550, p = 0.903**  
+Not significant. Minimal difference from reference category (likely Submucosa).
+
+### 8. extentSerosa
+**HR = 1.6966, p = 0.202**  
+Suggests ~70% higher hazard, but p=0.20 is not significant. No strong evidence that “Serosa” is worse than the reference category.
+
+### 9. extentContiguous
+**HR = 2.8847, p = 0.0188 (significant)**  
+~2.9x hazard vs. the reference.  
+In plain language: “Tumor extending to contiguous structures significantly increases the risk (almost triple).”
+
+### 10. adhereYes
+**HR = 1.2024, p = 0.129**  
+Not significant (p=0.13). Possibly ~20% higher hazard, but not statistically confirmed.
+
+### 11. surgLong
+**HR = 1.3080, p = 0.0057 (significant)**  
+~31% higher hazard if surgery-to-registration interval is “Long” vs. “Short.”  
+In plain language: “Patients who had a longer gap between surgery and registration face a higher risk.”
+
+## Overall Model Summary
+- **Concordance (C-index) ~ 0.672:** The model’s discrimination is moderate (can rank patients’ risk ~67% of the time correctly).
+- **Likelihood Ratio / Wald / Score tests:** All highly significant (p < 2e-16), meaning the model overall is very unlikely to be random
+
+
+## Visualizing Survival Curves from a Cox Model
+```{r}
+newdata_rx <- data.frame(
+  rx = c("Obs", "Lev", "Lev+5FU"),
+  obstruct = "No",
+  log_nodes = mean(colon_any_event$log_nodes, na.rm=TRUE),
+  differ = "Moderate",
+  extent = "Serosa",
+  adhere = "No",
+  surg = "Short"
+)
+
+fit_surv <- survfit(cox_model, newdata = newdata_rx)
+
+plot(fit_surv, col=c("blue","red","green"), lty=1:3,
+     xlab="Days", ylab="Survival Probability",
+     main="Adjusted Survival by Treatment")
+legend("bottomleft", legend=c("Obs","Lev","Lev+5FU"),
+       col=c("blue","red","green"), lty=1:3)
+
+```
+
+
+## Conclusion
+
+### Data Preparation & Exploration
+- We began by importing the Colon dataset, checking for missing values (notably in nodes and differ) and addressing them via imputation.
+- Outlier checks (e.g., nodes, age) led to transformations (log_nodes) to handle skew.
+- Basic Kaplan-Meier analyses indicated Lev+5FU was beneficial compared to Obs, while Lev alone was not clearly different.
+
+### Cox PH Modeling
+- Univariable tests identified rx=Lev+5FU, log_nodes, and certain tumor extent levels as strong predictors.
+- The final Cox model included:
+  Surv(time, status) ∼ rx + obstruct + log_nodes + differ + extent + adhere + surg.
+- Key significant effects:
+  - **rx=Lev+5FU:** Hazard ratio ~0.62 (p<0.0001), a ~38% hazard reduction vs. observation.
+  - **log_nodes:** HR ~1.91, the strongest risk factor—more positive nodes drastically increase hazard.
+  - **extentContiguous:** ~2.9x hazard vs. baseline.
+  - **surgLong:** ~31% higher hazard vs. surgShort.
+
+### Model Assumption Checks & Validation
+- **PH Tests:** Showed potential violations for obstruct, log_nodes, differ, suggesting mild time-varying effects or need for stratification.
+- **Performance:**
+  - In-sample C-index: ~0.67, indicating moderate discrimination.
+  - Bootstrapping: Confirmed stability with minimal bias and SE ~0.012.
+  - 5-Fold Cross-Validation: Mean C-index ~0.66, close to in-sample, implying limited overfitting.
+
+### Adjusted Survival Curves
+- Visualizing survival by rx with other covariates at average levels showed a notably higher curve for Lev+5FU, confirming its protective effect.
+- Lev alone tracked close to observation, matching the non-significant difference in hazard.
+
+### Overall Findings
+- **Lev+5FU** stands out as the most effective regimen in this dataset, significantly improving survival compared to observation or Lev alone.
+- **Number of nodes (log_nodes)** remains the dominant risk factor, highlighting the critical prognostic role of lymph node involvement.
+- The model offers moderate predictive power (C-index ~0.67), confirmed by bootstrapping and cross-validation.
+
+### Practical Implication
+Clinically, combining Lev+5FU post-surgery could lead to better outcomes, especially in patients with higher node counts or advanced tumor extent, although further prospective validation is advised.
