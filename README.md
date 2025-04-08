@@ -3,6 +3,14 @@
 This repository contains a comprehensive survival analysis on the Colon Cancer dataset using both nonparametric and semi‐parametric methods. The analyses are split into multiple R Markdown files, and the corresponding model outputs are provided as PDFs.
 
 ---
+## Our Team
+
+
+- [Sourena Mohit](https://github.com/Sourena-Mohit)
+- [Samuel T.C. Kong](https://github.com/samueltckong)
+- [Denis SOH](https://github.com/Denis-SOH)
+- [Yw0991](https://github.com/Yw0991)
+---
 
 ## Repository Structure
 
